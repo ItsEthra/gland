@@ -1,5 +1,6 @@
 use ratatui::prelude::{Buffer, Rect};
 use std::{
+    any::Any,
     fmt,
     hash::{Hash, Hasher},
     mem::replace,
@@ -16,14 +17,18 @@ pub use compositor::*;
 pub struct LayerId(pub i16);
 
 impl LayerId {
-    /// Background.
-    pub const BACKGROUND: Self = Self(-100);
-    /// Foreground.
-    pub const FOREGROUND: Self = Self(100);
-    /// Popup.
-    pub const POPUP: Self = Self(200);
-    /// Topmost.
-    pub const TOPMOST: Self = Self(500);
+    /// Background: `-1_000`
+    pub const BACKGROUND: Self = Self(-1_000);
+    /// Middle: `0`
+    pub const MIDDLE: Self = Self(0);
+    /// Foreground: `1_000`
+    pub const FOREGROUND: Self = Self(1_000);
+    /// Popup: `2_000`
+    pub const POPUP: Self = Self(2_000);
+    /// Overlay: `5_000`
+    pub const OVERLAY: Self = Self(5_000);
+    /// Topmost: `10_000`
+    pub const TOPMOST: Self = Self(10_000);
 }
 
 /// Id of the component.
@@ -36,7 +41,7 @@ impl Id {
         let mut hasher = XxHash64::default();
         source.hash(&mut hasher);
 
-        NonZeroU64::new(hasher.finish()).map(Self).expect("Id is 0")
+        NonZeroU64::new(hasher.finish()).map(Self).expect("id is 0")
     }
 
     /// Combines id with another source of randomness.
@@ -45,7 +50,7 @@ impl Id {
         self.0.hash(&mut hasher);
         more.hash(&mut hasher);
 
-        NonZeroU64::new(hasher.finish()).map(Self).expect("Id is 0")
+        NonZeroU64::new(hasher.finish()).map(Self).expect("id is 0")
     }
 }
 
@@ -195,14 +200,16 @@ impl<E: Clone> EventAccess<E> {
     }
 }
 
-pub trait Component<'comp, S: 'comp = (), E: 'comp = ()> {
+/// UI component
+pub trait Component<S = (), E = ()>: Any {
+    /// Id of this component
     fn id(&self) -> Id;
+
+    /// Function to draw the inner ui.
+    /// If component is root the `area` equals to the whole screen.
     fn view(&self, area: Rect, buf: &mut Buffer, state: &S);
 
-    fn handle_event(&mut self, _event: &mut EventAccess<E>, _cx: &mut Context<'comp, S, E>) {}
-    fn should_update(&self, _state: &S) -> bool {
-        true
-    }
+    fn handle_event(&mut self, _event: &mut EventAccess<E>, _cx: &mut Context<S, E>) {}
 }
 
 /// Forwards `handle_event` to multiple child components.
@@ -243,5 +250,19 @@ macro_rules! forward_view {
 
             any
         }
+    };
+}
+
+/// Helpful macro to avoid fully qualified syntax.
+#[macro_export]
+macro_rules! id {
+    ($self:expr) => {
+        <_ as $crate::Component>::id($self)
+    };
+    ($state:tt, $self:expr) => {
+        <_ as $crate::Component<$state>>::id($self)
+    };
+    ($state:tt, $event:tt, $self:expr) => {
+        <_ as $crate::Component<$state, $event>>::id($self)
     };
 }

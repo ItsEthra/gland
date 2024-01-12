@@ -6,67 +6,77 @@ use crossterm::{
         disable_raw_mode, enable_raw_mode, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
-use futures_util::{stream::select_all, Stream, StreamExt};
+use futures_util::{
+    stream::{self, select_all},
+    Stream, StreamExt,
+};
 use ratatui::{
     backend::Backend,
     prelude::{Buffer, Rect},
     widgets::Widget,
     Terminal,
 };
-use std::{collections::BTreeMap, io, mem::take, pin::Pin, time::Duration};
+use std::{
+    any::Any,
+    collections::BTreeMap,
+    io,
+    mem::{take, transmute},
+    pin::Pin,
+    time::Duration,
+};
 use tokio::{sync::mpsc::Receiver, time::interval};
 use tokio_stream::wrappers::{IntervalStream, ReceiverStream};
 
-type Callback<'comp, S, E> = Box<dyn FnOnce(&mut Compositor<'comp, S, E>) + 'comp>;
+type Callback<S, E> = Box<dyn FnOnce(&mut Compositor<S, E>)>;
 
 /// Context of the current update.
-pub struct Context<'comp, S: 'comp = (), E: 'comp = ()> {
-    callbacks: Vec<Callback<'comp, S, E>>,
+pub struct Context<S = (), E = ()> {
+    callbacks: Vec<Callback<S, E>>,
+    size: Rect,
     state: S,
 }
 
-impl<'comp, S: 'comp, E: 'comp> Context<'comp, S, E> {
+impl<S: 'static, E: 'static> Context<S, E> {
     /// Adds a callback that will be executed after all components have been drawn in this frame.
-    pub fn add_callback(&mut self, func: impl FnOnce(&mut Compositor<'comp, S, E>) + 'comp) {
+    pub fn add_callback(&mut self, func: impl FnOnce(&mut Compositor<S, E>) + 'static) {
         self.callbacks.push(Box::new(func))
     }
 
-    /// Returns immutable ref to the compositor state.
+    /// Returns the size of the terminal in cells.
+    pub fn size(&self) -> Rect {
+        self.size
+    }
+
+    /// Returns an immutable reference to the compositor state.
     pub fn state(&self) -> &S {
         &self.state
     }
 
-    /// Returns mutable ref to the compositor state.
+    /// Returns a mutable reference to the compositor state.
     pub fn state_mut(&mut self) -> &mut S {
         &mut self.state
     }
-
-    fn new(state: S) -> Self {
-        Self {
-            callbacks: Vec::with_capacity(8),
-            state,
-        }
-    }
 }
 
-pub struct Compositor<'comp, S: 'comp = (), E: 'comp = ()> {
-    layers: BTreeMap<LayerId, Vec<Box<dyn Component<'comp, S, E> + 'comp>>>,
+/// Main interface that draws components and dispatches events.
+pub struct Compositor<S = (), E = ()> {
+    layers: BTreeMap<LayerId, Vec<Box<dyn Component<S, E>>>>,
     state: S,
 
-    streams: Vec<Pin<Box<dyn Stream<Item = Event<E>> + 'comp>>>,
+    streams: Vec<Pin<Box<dyn Stream<Item = Event<E>>>>>,
     timeout: Duration,
 
     exit: bool,
 }
 
-impl<'comp, E: 'comp> Compositor<'comp, (), E> {
+impl<E: 'static> Compositor<(), E> {
     /// Creates new compositor without state.
     pub fn new() -> Self {
         Self::with_state(())
     }
 }
 
-impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
+impl<S: 'static, E: 'static> Compositor<S, E> {
     /// Creates new compositor with custom state.
     pub fn with_state(state: S) -> Self {
         Self {
@@ -79,11 +89,7 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
     }
 
     /// Replaces component or adds new one at some layer.
-    pub fn replace_at<T: Component<'comp, S, E> + 'comp>(
-        &mut self,
-        layer_id: LayerId,
-        component: T,
-    ) {
+    pub fn replace_at<C: Component<S, E>>(&mut self, layer_id: LayerId, component: C) {
         let layer = self.layers.entry(layer_id).or_default();
         layer.retain(|c| c.id() != component.id());
         layer.push(Box::new(component));
@@ -94,6 +100,52 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
         self.layers
             .values_mut()
             .for_each(|l| l.retain(|c| c.id() != component_id));
+    }
+
+    /// Downcasts mounted component and returns a reference to it.
+    pub fn get_at<C: Component<S, E>>(&self, layer_id: LayerId, component_id: Id) -> Option<&C> {
+        let dyncomp = &**self
+            .layers
+            .get(&layer_id)?
+            .iter()
+            .find(|c| c.id() == component_id)? as &dyn Any;
+        dyncomp.downcast_ref::<C>()
+    }
+
+    /// Downcasts mounted component and returns a mutable reference to it.
+    pub fn get_mut_at<C: Component<S, E>>(
+        &mut self,
+        layer_id: LayerId,
+        component_id: Id,
+    ) -> Option<&mut C> {
+        let dyncomp = &mut **self
+            .layers
+            .get_mut(&layer_id)?
+            .iter_mut()
+            .find(|c| c.id() == component_id)? as &mut dyn Any;
+        dyncomp.downcast_mut::<C>()
+    }
+
+    /// Unmounts a component and downcasts it.
+    pub fn take_at<C: Component<S, E>>(
+        &mut self,
+        layer_id: LayerId,
+        component_id: Id,
+    ) -> Option<Box<C>> {
+        let layer = self.layers.get_mut(&layer_id)?;
+        let position = layer.iter().position(|c| c.id() == component_id)?;
+
+        let dyncomp = layer.swap_remove(position) as Box<dyn Any>;
+        match dyncomp.downcast::<C>() {
+            Ok(comp) => Some(comp),
+            Err(other) => {
+                // SAFETY: It's the same component we casted above.
+                let dyncomp = unsafe { transmute::<Box<dyn Any>, Box<dyn Component<S, E>>>(other) };
+                layer.push(dyncomp);
+
+                None
+            }
+        }
     }
 
     /// Removes component at a layer, returning `true` if the component was removed.
@@ -113,7 +165,7 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
     }
 
     /// Adds new stream of events, UI is re-rendered when event is received.
-    pub fn with_stream(&mut self, stream: impl Stream<Item = Event<E>> + 'comp) -> &mut Self {
+    pub fn with_stream(&mut self, stream: impl Stream<Item = Event<E>> + 'static) -> &mut Self {
         self.streams.push(Box::pin(stream.map(Into::into)));
         self
     }
@@ -146,16 +198,21 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
         &mut self.state
     }
 
+    /// Exit the compositor.
     pub fn exit(&mut self) {
         self.exit = true;
     }
 
+    /// Begin polling events and draw ui. Exit after [`Event::Exit`] is emitted or [`Self::exit`] is called.
     pub async fn run<B: Backend>(mut self, backend: B) -> io::Result<()> {
         let guard = TerminalGuard::new()?;
 
         if !self.timeout.is_zero() {
             self.with_stream(IntervalStream::new(interval(self.timeout)).map(|_| Event::Tick));
         }
+
+        // Tick once at the start to draw initial ui.
+        self.with_stream(stream::iter([Event::Tick]));
 
         let mut flux = select_all(take(&mut self.streams));
         let mut terminal = Terminal::new(backend)?;
@@ -166,7 +223,11 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
             }
 
             // Pass event to all components.
-            let mut cx: Context<'comp, S, E> = Context::new(self.state);
+            let mut cx: Context<S, E> = Context {
+                callbacks: Vec::with_capacity(8),
+                size: terminal.size()?,
+                state: self.state,
+            };
             let mut access: EventAccess<E> = EventAccess::new(event);
 
             // Iterate from top to bottom, break if event is consumed.
@@ -180,7 +241,11 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
                 }
             }
 
-            let Context { callbacks, state } = cx;
+            let Context {
+                callbacks,
+                state,
+                size: _,
+            } = cx;
             self.state = state;
             callbacks.into_iter().for_each(|cc| cc(&mut self));
 
@@ -190,19 +255,15 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
 
             terminal
                 .draw(|f| {
-                    self.layers
-                        .values()
-                        .flat_map(|l| l.iter())
-                        .filter(|c| c.should_update(&self.state))
-                        .for_each(|c| {
-                            f.render_widget(
-                                ComponentWidget {
-                                    component: &**c,
-                                    state: &self.state,
-                                },
-                                f.size(),
-                            )
-                        });
+                    self.layers.values().flat_map(|l| l.iter()).for_each(|c| {
+                        f.render_widget(
+                            ComponentWidget {
+                                component: &**c,
+                                state: &self.state,
+                            },
+                            f.size(),
+                        )
+                    });
                 })
                 .unwrap();
         }
@@ -212,19 +273,19 @@ impl<'comp, S: 'comp, E: 'comp> Compositor<'comp, S, E> {
     }
 }
 
-impl<'comp, S: 'comp + Default, E: 'comp> Default for Compositor<'comp, S, E> {
+impl<S: 'static + Default, E: 'static> Default for Compositor<S, E> {
     #[inline]
     fn default() -> Self {
         Self::with_state(S::default())
     }
 }
 
-struct ComponentWidget<'r, 'comp, S: 'comp, E: 'comp> {
-    component: &'r (dyn Component<'comp, S, E> + 'comp),
+struct ComponentWidget<'r, S, E> {
+    component: &'r dyn Component<S, E>,
     state: &'r S,
 }
 
-impl<'r, 'comp, S: 'comp, E: 'comp> Widget for ComponentWidget<'r, 'comp, S, E> {
+impl<'r, S: 'static, E: 'static> Widget for ComponentWidget<'r, S, E> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         self.component.view(area, buf, self.state);
     }
