@@ -76,18 +76,8 @@ impl<E: 'static> Compositor<(), E> {
     }
 }
 
+/// Non-builder functions
 impl<S: 'static, E: 'static> Compositor<S, E> {
-    /// Creates new compositor with custom state.
-    pub fn with_state(state: S) -> Self {
-        Self {
-            timeout: Duration::from_secs(3),
-            layers: BTreeMap::new(),
-            streams: Vec::new(),
-            exit: false,
-            state,
-        }
-    }
-
     /// Replaces component or adds new one at some layer.
     pub fn replace_at<C: Component<S, E>>(&mut self, layer_id: LayerId, component: C) {
         let layer = self.layers.entry(layer_id).or_default();
@@ -157,37 +147,6 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
         true
     }
 
-    /// Adds event wait timeout, when `timeout` passes, new `Event::Tick` is generated and ui is re-rendered.
-    /// Default is 3 seconds. To disable periodic ui updates set this to `Duration::ZERO`.
-    pub fn set_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Adds new stream of events, UI is re-rendered when event is received.
-    pub fn with_stream(&mut self, stream: impl Stream<Item = Event<E>> + 'static) -> &mut Self {
-        self.streams.push(Box::pin(stream.map(Into::into)));
-        self
-    }
-
-    /// Adds new stream built from the receiver.
-    pub fn with_receiver_stream(&mut self, recv: Receiver<E>) -> &mut Self {
-        self.with_stream(ReceiverStream::new(recv).map(Event::Custom));
-        self
-    }
-
-    /// Adds new stream created from terminal event.
-    #[cfg(feature = "event-stream")]
-    pub fn with_event_stream(&mut self) -> &mut Self {
-        use crossterm::event::EventStream;
-
-        let stream = EventStream::new()
-            .map(|x| x.expect("failed to receive a terminal event"))
-            .map(Event::Terminal);
-        self.with_stream(stream);
-        self
-    }
-
     /// Returns state of the compositor immutably.
     pub fn state(&self) -> &S {
         &self.state
@@ -202,17 +161,62 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
     pub fn exit(&mut self) {
         self.exit = true;
     }
+}
+
+/// Builder functions
+impl<S: 'static, E: 'static> Compositor<S, E> {
+    /// Creates new compositor with custom state.
+    pub fn with_state(state: S) -> Self {
+        Self {
+            timeout: Duration::from_secs(3),
+            layers: BTreeMap::new(),
+            streams: Vec::new(),
+            exit: false,
+            state,
+        }
+    }
+
+    /// Adds event wait timeout, when `timeout` passes, new `Event::Tick` is generated and ui is re-rendered.
+    /// Default is 3 seconds. To disable periodic ui updates set this to `Duration::ZERO`.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Adds new stream of events, UI is re-rendered when event is received.
+    pub fn with_stream(mut self, stream: impl Stream<Item = Event<E>> + 'static) -> Self {
+        self.streams.push(Box::pin(stream.map(Into::into)));
+        self
+    }
+
+    /// Adds new stream built from the receiver.
+    pub fn with_receiver_stream(self, recv: Receiver<E>) -> Self {
+        self.with_stream(ReceiverStream::new(recv).map(Event::Custom))
+    }
+
+    /// Adds new stream created from terminal event.
+    #[cfg(feature = "event-stream")]
+    pub fn with_event_stream(self) -> Self {
+        use crossterm::event::EventStream;
+
+        let stream = EventStream::new()
+            .map(|x| x.expect("failed to receive a terminal event"))
+            .map(Event::Terminal);
+        self.with_stream(stream)
+    }
 
     /// Begin polling events and draw ui. Exit after [`Event::Exit`] is emitted or [`Self::exit`] is called.
     pub async fn run<B: Backend>(mut self, backend: B) -> io::Result<()> {
         let guard = TerminalGuard::new()?;
 
         if !self.timeout.is_zero() {
-            self.with_stream(IntervalStream::new(interval(self.timeout)).map(|_| Event::Tick));
+            self.streams.push(Box::pin(
+                IntervalStream::new(interval(self.timeout)).map(|_| Event::Tick),
+            ));
         }
 
         // Tick once at the start to draw initial ui.
-        self.with_stream(stream::iter([Event::Tick]));
+        self = self.with_stream(stream::iter([Event::Tick]));
 
         let mut flux = select_all(take(&mut self.streams));
         let mut terminal = Terminal::new(backend)?;

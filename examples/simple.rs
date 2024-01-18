@@ -163,8 +163,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut comp: Compositor<AppState> = Compositor::with_state(AppState {
         text: "Write to modify the text, press enter to increment".to_owned(),
         start: Instant::now(),
-    });
-    comp.with_event_stream().replace_at(
+    })
+    .with_event_stream();
+
+    comp.replace_at(
         LayerId::FOREGROUND,
         MainScreen {
             input: Input,
