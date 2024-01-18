@@ -167,21 +167,20 @@ pub struct EventAccess<E = ()> {
 }
 
 impl<E> EventAccess<E> {
-    pub(crate) fn new(event: Event<E>) -> Self {
-        Self { event }
-    }
-
-    /// Peaks the event
-    pub fn peak(&self) -> &Event<E> {
+    /// Peeks the event
+    #[inline]
+    pub fn peek(&self) -> &Event<E> {
         &self.event
     }
 
     /// Consumes the event, sets old event to `None`
+    #[inline]
     pub fn consume(&mut self) -> Event<E> {
         replace(&mut self.event, Event::None)
     }
 
     /// Replaces old event with the one supplied, returns old event
+    #[inline]
     pub fn replace(&mut self, event: Event<E>) -> Event<E> {
         replace(&mut self.event, event)
     }
@@ -195,6 +194,7 @@ impl<E> EventAccess<E> {
 
 impl<E: Clone> EventAccess<E> {
     /// Clones the event, doesn't modify the result
+    #[inline]
     pub fn cloned(&self) -> Event<E> {
         self.event.clone()
     }

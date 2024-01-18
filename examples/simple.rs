@@ -44,7 +44,7 @@ impl Component<AppState> for MainScreen {
     fn handle_event(&mut self, event: &mut EventAccess, cx: &mut Context<AppState>) {
         forward_handle_event!(event, cx, self.input);
 
-        if let Event::Terminal(CTEvent::Key(ke)) = event.peak() {
+        if let Event::Terminal(CTEvent::Key(ke)) = event.peek() {
             match ke.code {
                 KeyCode::Esc => cx.add_callback(|cc| cc.exit()),
                 KeyCode::Tab => {
@@ -106,7 +106,7 @@ impl<S: 'static> Component<S> for Popup {
     }
 
     fn handle_event(&mut self, event: &mut EventAccess, cx: &mut Context<S>) {
-        match event.peak() {
+        match event.peek() {
             Event::Terminal(CTEvent::Key(ke)) if ke.code == KeyCode::Esc => {
                 let id = id!(S, self);
                 cx.add_callback(move |cc| cc.remove_all(id));
@@ -142,7 +142,7 @@ impl Component<AppState> for Input {
     }
 
     fn handle_event(&mut self, event: &mut EventAccess, cx: &mut Context<AppState>) {
-        if let Event::Terminal(CTEvent::Key(ke)) = event.peak() {
+        if let Event::Terminal(CTEvent::Key(ke)) = event.peek() {
             match ke.code {
                 KeyCode::Char(ch) => {
                     cx.state_mut().text.push(ch);

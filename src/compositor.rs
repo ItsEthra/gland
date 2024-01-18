@@ -19,6 +19,7 @@ use ratatui::{
 use std::{
     any::Any,
     collections::BTreeMap,
+    future::Future,
     io,
     mem::{take, transmute},
     pin::Pin,
@@ -205,6 +206,11 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
         self.with_stream(stream)
     }
 
+    /// Exit the compositor when this future resolves
+    pub fn with_shutdown(self, shutdown: impl Future + 'static) -> Self {
+        self.with_stream(stream::once(shutdown).map(|_| Event::Exit))
+    }
+
     /// Begin polling events and draw ui. Exit after [`Event::Exit`] is emitted or [`Self::exit`] is called.
     pub async fn run<B: Backend>(mut self, backend: B) -> io::Result<()> {
         let guard = TerminalGuard::new()?;
@@ -232,7 +238,7 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
                 size: terminal.size()?,
                 state: self.state,
             };
-            let mut access: EventAccess<E> = EventAccess::new(event);
+            let mut access: EventAccess<E> = EventAccess { event };
 
             // Iterate from top to bottom, break if event is consumed.
             'outer: for layer in self.layers.values_mut().rev() {
