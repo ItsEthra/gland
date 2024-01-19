@@ -56,9 +56,9 @@ impl Id {
 
 /// Event that can occur during runtime.
 #[non_exhaustive]
-pub enum Event<T> {
-    /// Custom event
-    Custom(T),
+pub enum Event<E> {
+    /// User event
+    User(E),
     /// Event from the terminal
     Terminal(crossterm::event::Event),
     /// Next tick occured without intermediate event
@@ -70,35 +70,35 @@ pub enum Event<T> {
 }
 
 impl<T> Event<T> {
-    /// Checks if event is custom.
+    /// Checks if event is user.
     #[inline]
-    pub fn is_custom(&self) -> bool {
-        matches!(self, Self::Custom(_))
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User(_))
     }
 
-    /// Converts into custom event ref on success.
+    /// Converts into user event ref on success.
     #[inline]
-    pub fn as_custom(&self) -> Option<&T> {
+    pub fn as_user(&self) -> Option<&T> {
         match self {
-            Event::Custom(e) => Some(e),
+            Event::User(e) => Some(e),
             _ => None,
         }
     }
 
-    /// Converts into custom event mut ref on success.
+    /// Converts into user event mut ref on success.
     #[inline]
-    pub fn as_mut_custom(&mut self) -> Option<&mut T> {
+    pub fn as_mut_user(&mut self) -> Option<&mut T> {
         match self {
-            Event::Custom(e) => Some(e),
+            Event::User(e) => Some(e),
             _ => None,
         }
     }
 
     /// Converts into custom event on success.
     #[inline]
-    pub fn into_custom(self) -> Result<T, Self> {
+    pub fn into_user(self) -> Result<T, Self> {
         match self {
-            Event::Custom(e) => Ok(e),
+            Event::User(e) => Ok(e),
             _ => Err(self),
         }
     }
@@ -141,7 +141,7 @@ impl<T: Clone> Clone for Event<T> {
     fn clone(&self) -> Self {
         match self {
             Event::Terminal(e) => Self::Terminal(e.clone()),
-            Event::Custom(e) => Self::Custom(e.clone()),
+            Event::User(e) => Self::User(e.clone()),
             Event::Tick => Self::Tick,
             Event::Exit => Self::Exit,
             Event::None => Self::None,
@@ -153,7 +153,7 @@ impl<T: fmt::Debug> fmt::Debug for Event<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Event::Terminal(e) => f.debug_tuple("Crossterm").field(e).finish(),
-            Event::Custom(e) => f.debug_tuple("Custom").field(e).finish(),
+            Event::User(e) => f.debug_tuple("User").field(e).finish(),
             Event::Tick => write!(f, "Tick"),
             Event::Exit => write!(f, "Exit"),
             Event::None => write!(f, "None"),

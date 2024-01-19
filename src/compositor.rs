@@ -190,9 +190,9 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
         self
     }
 
-    /// Adds new stream built from the receiver.
+    /// Adds new stream that emits user events built from the receiver.
     pub fn with_receiver_stream(self, recv: Receiver<E>) -> Self {
-        self.with_stream(ReceiverStream::new(recv).map(Event::Custom))
+        self.with_stream(ReceiverStream::new(recv).map(Event::User))
     }
 
     /// Adds new stream created from terminal event.
