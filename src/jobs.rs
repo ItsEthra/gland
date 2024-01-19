@@ -2,10 +2,15 @@ use crate::{Callback, Compositor, Resume};
 use std::{future::Future, marker::PhantomData};
 use tokio::{sync::mpsc, task::LocalSet};
 
-pub trait IntoCallback<S, E>: 'static {
+mod sealed {
+    pub trait Sealed<S, E> {}
+}
+
+pub trait IntoCallback<S, E>: sealed::Sealed<S, E> + 'static {
     fn into_callback(self) -> Option<Callback<S, E>>;
 }
 
+impl<S, E> sealed::Sealed<S, E> for () {}
 impl<S, E> IntoCallback<S, E> for () {
     #[inline]
     fn into_callback(self) -> Option<Callback<S, E>> {
@@ -13,6 +18,7 @@ impl<S, E> IntoCallback<S, E> for () {
     }
 }
 
+impl<S, E, C> sealed::Sealed<S, E> for C where C: for<'c> FnOnce(&'c mut Compositor<S, E>) + 'static {}
 impl<S, E, C> IntoCallback<S, E> for C
 where
     C: for<'c> FnOnce(&'c mut Compositor<S, E>) + 'static,
