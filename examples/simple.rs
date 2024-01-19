@@ -9,7 +9,12 @@ use ratatui::{
     style::{Color, Style},
     widgets::{Block, Borders, Clear, Widget},
 };
-use std::{error::Error, io, time::Instant};
+use std::{
+    error::Error,
+    io,
+    time::{Duration, Instant},
+};
+use tokio::time::sleep;
 
 struct AppState {
     text: String,
@@ -114,6 +119,22 @@ impl<S: 'static> Component<S> for Popup {
             }
             Event::Terminal(CTEvent::Key(ke)) if let KeyCode::Char(ref c) = ke.code => {
                 self.text.push(*c);
+                // If you completes text to `clear` then we clear the text after 1 second.
+
+                if self.text.ends_with("clear") {
+                    let id = id!(self);
+                    cx.jobs().spawn(async move {
+                        sleep(Duration::from_secs(1)).await;
+
+                        move |cc: &mut Compositor<S>| {
+                            cc.get_mut_at::<Self>(LayerId::POPUP, id)
+                                .unwrap()
+                                .text
+                                .clear();
+                        }
+                    });
+                }
+
                 event.consume();
             }
             Event::Terminal(CTEvent::Key(ke)) if matches!(ke.code, KeyCode::Backspace) => {

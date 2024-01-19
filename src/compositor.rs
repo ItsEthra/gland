@@ -1,4 +1,4 @@
-use crate::{Component, Event, EventAccess, Id, LayerId};
+use crate::{Component, Event, EventAccess, Id, Jobs, LayerId};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -25,19 +25,28 @@ use std::{
     pin::Pin,
     time::Duration,
 };
-use tokio::{sync::mpsc::Receiver, time::interval};
+use tokio::{
+    sync::mpsc::{self, Receiver},
+    task::LocalSet,
+    time::interval,
+};
 use tokio_stream::wrappers::{IntervalStream, ReceiverStream};
 
-type Callback<S, E> = Box<dyn FnOnce(&mut Compositor<S, E>)>;
+pub type Callback<S, E> = Box<dyn FnOnce(&mut Compositor<S, E>)>;
 
 /// Context of the current update.
-pub struct Context<S = (), E = ()> {
+pub struct Context<'comp, S = (), E = ()> {
     callbacks: Vec<Callback<S, E>>,
+    jobs: &'comp Jobs<'comp, S, E>,
     size: Rect,
     state: S,
 }
 
-impl<S: 'static, E: 'static> Context<S, E> {
+impl<'comp, S: 'static, E: 'static> Context<'comp, S, E> {
+    pub fn jobs(&self) -> &'comp Jobs<S, E> {
+        self.jobs
+    }
+
     /// Adds a callback that will be executed after all components have been drawn in this frame.
     pub fn add_callback(&mut self, func: impl FnOnce(&mut Compositor<S, E>) + 'static) {
         self.callbacks.push(Box::new(func))
@@ -59,12 +68,19 @@ impl<S: 'static, E: 'static> Context<S, E> {
     }
 }
 
+#[non_exhaustive]
+pub(crate) enum Resume<S, E> {
+    Event(Event<E>),
+    JobCallback(Callback<S, E>),
+}
+
 /// Main interface that draws components and dispatches events.
+#[allow(clippy::type_complexity)]
 pub struct Compositor<S = (), E = ()> {
     layers: BTreeMap<LayerId, Vec<Box<dyn Component<S, E>>>>,
     state: S,
 
-    streams: Vec<Pin<Box<dyn Stream<Item = Event<E>>>>>,
+    streams: Vec<Pin<Box<dyn Stream<Item = Resume<S, E>>>>>,
     timeout: Duration,
 
     exit: bool,
@@ -186,7 +202,7 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
 
     /// Adds new stream of events, UI is re-rendered when event is received.
     pub fn with_stream(mut self, stream: impl Stream<Item = Event<E>> + 'static) -> Self {
-        self.streams.push(Box::pin(stream.map(Into::into)));
+        self.streams.push(Box::pin(stream.map(Resume::Event)));
         self
     }
 
@@ -217,66 +233,85 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
 
         if !self.timeout.is_zero() {
             self.streams.push(Box::pin(
-                IntervalStream::new(interval(self.timeout)).map(|_| Event::Tick),
+                IntervalStream::new(interval(self.timeout))
+                    .map(|_| Event::Tick)
+                    .map(Resume::Event),
             ));
         }
 
         // Tick once at the start to draw initial ui.
         self = self.with_stream(stream::iter([Event::Tick]));
 
+        let (sender, rx) = mpsc::channel(12);
+        self.streams.push(Box::pin(ReceiverStream::new(rx)));
+
+        let set = LocalSet::new();
+        let jobs = Jobs::<S, E>::new(&set, sender);
+
         let mut flux = select_all(take(&mut self.streams));
         let mut terminal = Terminal::new(backend)?;
 
-        while let Some(event) = flux.next().await {
-            if matches!(event, Event::Exit) {
-                break;
-            }
+        set.run_until(async move {
+            while let Some(event) = flux.next().await {
+                let event = match event {
+                    Resume::Event(e) => e,
+                    Resume::JobCallback(callback) => {
+                        callback(&mut self);
+                        Event::None
+                    }
+                };
 
-            // Pass event to all components.
-            let mut cx: Context<S, E> = Context {
-                callbacks: Vec::with_capacity(8),
-                size: terminal.size()?,
-                state: self.state,
-            };
-            let mut access: EventAccess<E> = EventAccess { event };
+                // Pass event to all components.
+                let mut cx: Context<S, E> = Context {
+                    callbacks: Vec::with_capacity(8),
+                    size: terminal.size()?,
+                    state: self.state,
+                    jobs: &jobs,
+                };
+                let mut access: EventAccess<E> = EventAccess { event };
 
-            // Iterate from top to bottom, break if event is consumed.
-            'outer: for layer in self.layers.values_mut().rev() {
-                for component in layer.iter_mut() {
-                    component.handle_event(&mut access, &mut cx);
+                // Iterate from top to bottom, break if event is consumed.
+                'outer: for layer in self.layers.values_mut().rev() {
+                    for component in layer.iter_mut() {
+                        component.handle_event(&mut access, &mut cx);
 
-                    if access.is_consumed() {
-                        break 'outer;
+                        if access.is_consumed() {
+                            break 'outer;
+                        }
                     }
                 }
+
+                let Context {
+                    callbacks,
+                    state,
+                    size: _,
+                    jobs: _,
+                } = cx;
+                self.state = state;
+                callbacks.into_iter().for_each(|cc| cc(&mut self));
+
+                if self.exit {
+                    break;
+                }
+
+                terminal
+                    .draw(|f| {
+                        self.layers.values().flat_map(|l| l.iter()).for_each(|c| {
+                            f.render_widget(
+                                ComponentWidget {
+                                    component: &**c,
+                                    state: &self.state,
+                                },
+                                f.size(),
+                            )
+                        });
+                    })
+                    .unwrap();
             }
 
-            let Context {
-                callbacks,
-                state,
-                size: _,
-            } = cx;
-            self.state = state;
-            callbacks.into_iter().for_each(|cc| cc(&mut self));
-
-            if self.exit {
-                break;
-            }
-
-            terminal
-                .draw(|f| {
-                    self.layers.values().flat_map(|l| l.iter()).for_each(|c| {
-                        f.render_widget(
-                            ComponentWidget {
-                                component: &**c,
-                                state: &self.state,
-                            },
-                            f.size(),
-                        )
-                    });
-                })
-                .unwrap();
-        }
+            io::Result::Ok(())
+        })
+        .await?;
 
         drop(guard);
         Ok(())

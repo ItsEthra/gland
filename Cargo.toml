@@ -11,7 +11,7 @@ event-stream = ["crossterm/event-stream"]
 
 [dependencies]
 crossterm = { version = "0.27.0" }
-tokio = { version = "1.32.0", features = ["time"] }
+tokio = { version = "1.32.0", features = ["time", "rt"] }
 futures-util = "0.3.29"
 ratatui = "0.25.0"
 twox-hash = "1.6.3"
@@ -19,4 +19,4 @@ tokio-stream = { version = "0.1.14", features = ["time"] }
 
 [dev-dependencies]
 ratatui = { version = "0.25.0", features = ["crossterm"] }
-tokio = { version = "1.32.0", features = ["rt", "macros"] }
+tokio = { version = "1.32.0", features = ["macros"] }

@@ -8,6 +8,8 @@ use std::{
 };
 use twox_hash::XxHash64;
 
+mod jobs;
+pub use jobs::*;
 mod compositor;
 pub use compositor::*;
 
