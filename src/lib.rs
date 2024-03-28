@@ -1,4 +1,5 @@
 #![feature(trait_upcasting)]
+#![feature(doc_cfg)]
 
 use ratatui::prelude::{Buffer, Rect};
 use std::{

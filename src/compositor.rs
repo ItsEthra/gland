@@ -32,6 +32,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::{IntervalStream, ReceiverStream};
 
+/// Job callback
 pub type Callback<S, E> = Box<dyn FnOnce(&mut Compositor<S, E>)>;
 
 /// Context of the current update.
@@ -229,6 +230,7 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
 
     /// Adds new stream created from terminal event.
     #[cfg(feature = "event-stream")]
+    #[doc(cfg(feature = "event-stream"))]
     pub fn with_event_stream(self) -> Self {
         use crossterm::event::EventStream;
 

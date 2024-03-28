@@ -6,6 +6,7 @@ mod sealed {
     pub trait Sealed<S, E> {}
 }
 
+/// Implemented for types that can be returned from a job as a callback.
 pub trait IntoCallback<S, E>: sealed::Sealed<S, E> + 'static {
     fn into_callback(self) -> Option<Callback<S, E>>;
 }
@@ -29,6 +30,7 @@ where
     }
 }
 
+/// Job system, allows to execute futures and run callbacks when job is finished.
 pub struct Jobs<'set, S, E> {
     pub(crate) set: &'set LocalSet,
     sender: mpsc::Sender<Resume<S, E>>,
