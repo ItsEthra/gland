@@ -56,11 +56,11 @@ impl Component<AppState> for MainScreen {
                     let id = self.id();
                     cx.add_callback(move |cc| {
                         let screen = cc.get_at::<MainScreen>(LayerId::FOREGROUND, id).unwrap();
-                        cc.replace_at(
+                        _ = cc.insert_at(
                             LayerId::POPUP,
                             Popup {
                                 title_counter: screen.counter,
-                                ..Default::default()
+                                text: "type clear to erase via job".to_owned(),
                             },
                         );
                     });
@@ -99,10 +99,7 @@ impl<S: 'static> Component<S> for Popup {
 
         Clear.render(area, buf);
         let block = Block::new()
-            .title(format!(
-                "Popup: {} (value returned by downcasting)",
-                self.title_counter
-            ))
+            .title(format!("Popup, counter: {}", self.title_counter))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         block.render(area, buf);
@@ -123,14 +120,14 @@ impl<S: 'static> Component<S> for Popup {
 
                 if self.text.ends_with("clear") {
                     let id = id!(self);
+
                     cx.jobs().spawn(async move {
                         sleep(Duration::from_secs(1)).await;
 
                         move |cc: &mut Compositor<S>| {
-                            cc.get_mut_at::<Self>(LayerId::POPUP, id)
-                                .unwrap()
-                                .text
-                                .clear();
+                            if let Some(popup) = cc.get_mut_at::<Self>(LayerId::POPUP, id) {
+                                popup.text.clear();
+                            }
                         }
                     });
                 }

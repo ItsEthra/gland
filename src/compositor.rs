@@ -95,6 +95,22 @@ impl<E: 'static> Compositor<(), E> {
 
 /// Non-builder functions
 impl<S: 'static, E: 'static> Compositor<S, E> {
+    /// Inserts a new component at a layer, if already exists returns it.
+    pub fn insert_at<C: Component<S, E>>(
+        &mut self,
+        layer_id: LayerId,
+        component: C,
+    ) -> Result<(), C> {
+        let layer = self.layers.entry(layer_id).or_default();
+
+        if layer.iter().any(|c| c.id() == component.id()) {
+            Err(component)
+        } else {
+            layer.push(Box::new(component));
+            Ok(())
+        }
+    }
+
     /// Replaces component or adds new one at some layer.
     pub fn replace_at<C: Component<S, E>>(&mut self, layer_id: LayerId, component: C) {
         let layer = self.layers.entry(layer_id).or_default();

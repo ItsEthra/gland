@@ -1,3 +1,5 @@
+#![feature(trait_upcasting)]
+
 use ratatui::prelude::{Buffer, Rect};
 use std::{
     any::Any,
