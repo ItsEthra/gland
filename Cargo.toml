@@ -10,6 +10,10 @@ repository = "https://github.com/ItsEthra/gland"
 [features]
 event-stream = ["crossterm/event-stream"]
 
+[[example]]
+name = "simple"
+required-features = ["event-stream"]
+
 [dependencies]
 crossterm = "0.27.0"
 tokio = { version = "1.32.0", features = ["time", "rt"] }

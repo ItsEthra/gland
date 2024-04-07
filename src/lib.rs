@@ -6,7 +6,6 @@ use std::{
     any::Any,
     fmt,
     hash::{Hash, Hasher},
-    mem::replace,
     num::NonZeroU64,
 };
 use twox_hash::XxHash64;
@@ -61,17 +60,24 @@ impl Id {
 
 /// Event that can occur during runtime.
 #[non_exhaustive]
-pub enum Event<E> {
+pub enum Event<E = ()> {
     /// User event
     User(E),
     /// Event from the terminal
     Terminal(crossterm::event::Event),
     /// Next tick occured without intermediate event
     Tick,
-    /// Exists compositor when emitted
+    /// Exits compositor when emitted
     Exit,
-    /// No event, used as a placeholder when event was taken
+    #[doc(hidden)]
     None,
+}
+
+impl<T> Default for Event<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 impl<T> Event<T> {
@@ -140,6 +146,22 @@ impl<T> Event<T> {
             _ => Err(self),
         }
     }
+
+    /// Checks if the event is consumed.
+    #[inline]
+    pub fn is_consumed(&self) -> bool {
+        matches!(self, Event::None)
+    }
+
+    /// Consumes the event.
+    pub fn consume(&mut self) -> Event<T> {
+        assert!(
+            !matches!(self, Event::None),
+            "Event has already been consumed"
+        );
+
+        std::mem::take(self)
+    }
 }
 
 impl<T: Clone> Clone for Event<T> {
@@ -166,45 +188,6 @@ impl<T: fmt::Debug> fmt::Debug for Event<T> {
     }
 }
 
-/// Provides access to the [`Event`], default result is `Ignored`
-pub struct EventAccess<E = ()> {
-    event: Event<E>,
-}
-
-impl<E> EventAccess<E> {
-    /// Peeks the event
-    #[inline]
-    pub fn peek(&self) -> &Event<E> {
-        &self.event
-    }
-
-    /// Consumes the event, sets old event to `None`
-    #[inline]
-    pub fn consume(&mut self) -> Event<E> {
-        replace(&mut self.event, Event::None)
-    }
-
-    /// Replaces old event with the one supplied, returns old event
-    #[inline]
-    pub fn replace(&mut self, event: Event<E>) -> Event<E> {
-        replace(&mut self.event, event)
-    }
-
-    /// Checks if event was consumed
-    #[inline]
-    pub fn is_consumed(&self) -> bool {
-        matches!(self.event, Event::None)
-    }
-}
-
-impl<E: Clone> EventAccess<E> {
-    /// Clones the event, doesn't modify the result
-    #[inline]
-    pub fn cloned(&self) -> Event<E> {
-        self.event.clone()
-    }
-}
-
 /// UI component
 pub trait Component<S = (), E = ()>: Any {
     /// Id of this component
@@ -214,7 +197,7 @@ pub trait Component<S = (), E = ()>: Any {
     /// If component is root the `area` equals to the whole screen.
     fn view(&self, area: Rect, buf: &mut Buffer, state: &S);
 
-    fn handle_event(&mut self, _event: &mut EventAccess<E>, _cx: &mut Context<S, E>) {}
+    fn handle_event(&mut self, _event: &mut Event<E>, _cx: &mut Context<S, E>) {}
 }
 
 /// Forwards `handle_event` to multiple child components.
@@ -229,7 +212,7 @@ macro_rules! forward_handle_event {
         'forward: {
             $(
                 $comp.handle_event($event, $cx);
-                if $event.is_consumed() {
+                if matches!($event, $crate::Event::None) {
                     break 'forward true;
                 }
             )*

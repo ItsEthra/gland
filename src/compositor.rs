@@ -1,4 +1,4 @@
-use crate::{Component, Event, EventAccess, Id, Jobs, LayerId};
+use crate::{Component, Event, Id, Jobs, LayerId};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -69,7 +69,6 @@ impl<'comp, S: 'static, E: 'static> Context<'comp, S, E> {
     }
 }
 
-#[non_exhaustive]
 pub(crate) enum Resume<S, E> {
     Event(Event<E>),
     JobCallback(Callback<S, E>),
@@ -271,13 +270,17 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
 
         set.run_until(async move {
             while let Some(event) = flux.next().await {
-                let event = match event {
+                let mut event = match event {
                     Resume::Event(e) => e,
                     Resume::JobCallback(callback) => {
                         callback(&mut self);
                         Event::None
                     }
                 };
+                assert!(
+                    !matches!(event, Event::None),
+                    "`None` event is not allowed to be emitted"
+                );
 
                 // Pass event to all components.
                 let mut cx: Context<S, E> = Context {
@@ -286,14 +289,13 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
                     state: self.state,
                     jobs: &jobs,
                 };
-                let mut access: EventAccess<E> = EventAccess { event };
 
                 // Iterate from top to bottom, break if event is consumed.
                 'outer: for layer in self.layers.values_mut().rev() {
                     for component in layer.iter_mut() {
-                        component.handle_event(&mut access, &mut cx);
+                        component.handle_event(&mut event, &mut cx);
 
-                        if access.is_consumed() {
+                        if matches!(event, Event::None) {
                             break 'outer;
                         }
                     }

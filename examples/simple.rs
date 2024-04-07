@@ -1,9 +1,7 @@
 #![feature(if_let_guard)]
 
 use crossterm::event::{Event as CTEvent, KeyCode};
-use gland::{
-    forward_handle_event, id, Component, Compositor, Context, Event, EventAccess, Id, LayerId,
-};
+use gland::{forward_handle_event, id, Component, Compositor, Context, Event, Id, LayerId};
 use ratatui::{
     prelude::{Buffer, CrosstermBackend, Rect},
     style::{Color, Style},
@@ -46,10 +44,10 @@ impl Component<AppState> for MainScreen {
         buf.set_string(x, y, text, Style::new());
     }
 
-    fn handle_event(&mut self, event: &mut EventAccess, cx: &mut Context<AppState>) {
+    fn handle_event(&mut self, event: &mut Event, cx: &mut Context<AppState>) {
         forward_handle_event!(event, cx, self.input);
 
-        if let Event::Terminal(CTEvent::Key(ke)) = event.peek() {
+        if let Event::Terminal(CTEvent::Key(ke)) = event {
             match ke.code {
                 KeyCode::Esc => cx.add_callback(|cc| cc.exit()),
                 KeyCode::Tab => {
@@ -107,8 +105,8 @@ impl<S: 'static> Component<S> for Popup {
         buf.set_string(inner.x, inner.y, &self.text, Style::default());
     }
 
-    fn handle_event(&mut self, event: &mut EventAccess, cx: &mut Context<S>) {
-        match event.peek() {
+    fn handle_event(&mut self, event: &mut Event, cx: &mut Context<S>) {
+        match event {
             Event::Terminal(CTEvent::Key(ke)) if ke.code == KeyCode::Esc => {
                 let id = id!(S, self);
                 cx.add_callback(move |cc| cc.remove_all(id));
@@ -159,8 +157,8 @@ impl Component<AppState> for Input {
         );
     }
 
-    fn handle_event(&mut self, event: &mut EventAccess, cx: &mut Context<AppState>) {
-        if let Event::Terminal(CTEvent::Key(ke)) = event.peek() {
+    fn handle_event(&mut self, event: &mut Event, cx: &mut Context<AppState>) {
+        if let Event::Terminal(CTEvent::Key(ke)) = event {
             match ke.code {
                 KeyCode::Char(ch) => {
                     cx.state_mut().text.push(ch);
