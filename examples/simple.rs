@@ -82,7 +82,7 @@ struct Popup {
     text: String,
 }
 
-impl<S: 'static> Component<S> for Popup {
+impl<S: Send + 'static> Component<S> for Popup {
     fn id(&self) -> Id {
         Id::new("popup")
     }

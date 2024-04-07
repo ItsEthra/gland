@@ -27,18 +27,17 @@ use std::{
 };
 use tokio::{
     sync::mpsc::{self, Receiver},
-    task::LocalSet,
     time::interval,
 };
 use tokio_stream::wrappers::{IntervalStream, ReceiverStream};
 
 /// Job callback
-pub type Callback<S, E> = Box<dyn FnOnce(&mut Compositor<S, E>)>;
+pub type Callback<S, E> = Box<dyn FnOnce(&mut Compositor<S, E>) + Send + 'static>;
 
 /// Context of the current update.
 pub struct Context<'comp, S = (), E = ()> {
     callbacks: Vec<Callback<S, E>>,
-    jobs: &'comp Jobs<'comp, S, E>,
+    jobs: &'comp Jobs<S, E>,
     size: Rect,
     state: S,
 }
@@ -49,7 +48,7 @@ impl<'comp, S: 'static, E: 'static> Context<'comp, S, E> {
     }
 
     /// Adds a callback that will be executed after all components have been drawn in this frame.
-    pub fn add_callback(&mut self, func: impl FnOnce(&mut Compositor<S, E>) + 'static) {
+    pub fn add_callback(&mut self, func: impl FnOnce(&mut Compositor<S, E>) + Send + 'static) {
         self.callbacks.push(Box::new(func))
     }
 
@@ -246,7 +245,7 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
 
     /// Begin polling events and draw ui. Exit after [`Event::Exit`] is emitted or [`Self::exit`] is called.
     pub async fn run<B: Backend>(mut self, backend: B) -> io::Result<()> {
-        let guard = TerminalGuard::new()?;
+        let _guard = TerminalGuard::new()?;
 
         if !self.timeout.is_zero() {
             self.streams.push(Box::pin(
@@ -262,78 +261,71 @@ impl<S: 'static, E: 'static> Compositor<S, E> {
         let (sender, rx) = mpsc::channel(12);
         self.streams.push(Box::pin(ReceiverStream::new(rx)));
 
-        let set = LocalSet::new();
-        let jobs = Jobs::<S, E>::new(&set, sender);
+        let jobs = Jobs::new(sender);
 
         let mut flux = select_all(take(&mut self.streams));
         let mut terminal = Terminal::new(backend)?;
 
-        set.run_until(async move {
-            while let Some(event) = flux.next().await {
-                let mut event = match event {
-                    Resume::Event(e) => e,
-                    Resume::JobCallback(callback) => {
-                        callback(&mut self);
-                        Event::None
-                    }
-                };
-                assert!(
-                    !matches!(event, Event::None),
-                    "`None` event is not allowed to be emitted"
-                );
+        while let Some(event) = flux.next().await {
+            let mut event = match event {
+                Resume::Event(e) => e,
+                Resume::JobCallback(callback) => {
+                    callback(&mut self);
+                    Event::None
+                }
+            };
+            assert!(
+                !matches!(event, Event::None),
+                "`None` event is not allowed to be emitted"
+            );
 
-                // Pass event to all components.
-                let mut cx: Context<S, E> = Context {
-                    callbacks: Vec::with_capacity(8),
-                    size: terminal.size()?,
-                    state: self.state,
-                    jobs: &jobs,
-                };
+            // Pass event to all components.
+            let mut cx: Context<S, E> = Context {
+                callbacks: Vec::with_capacity(8),
+                size: terminal.size()?,
+                state: self.state,
+                jobs: &jobs,
+            };
 
-                // Iterate from top to bottom, break if event is consumed.
-                'outer: for layer in self.layers.values_mut().rev() {
-                    for component in layer.iter_mut() {
-                        component.handle_event(&mut event, &mut cx);
+            // Iterate from top to bottom, break if event is consumed.
+            'outer: for layer in self.layers.values_mut().rev() {
+                for component in layer.iter_mut() {
+                    component.handle_event(&mut event, &mut cx);
 
-                        if matches!(event, Event::None) {
-                            break 'outer;
-                        }
+                    if matches!(event, Event::None) {
+                        break 'outer;
                     }
                 }
-
-                let Context {
-                    callbacks,
-                    state,
-                    size: _,
-                    jobs: _,
-                } = cx;
-                self.state = state;
-                callbacks.into_iter().for_each(|cc| cc(&mut self));
-
-                if self.exit {
-                    break;
-                }
-
-                terminal
-                    .draw(|f| {
-                        self.layers.values().flat_map(|l| l.iter()).for_each(|c| {
-                            f.render_widget(
-                                ComponentWidget {
-                                    component: &**c,
-                                    state: &self.state,
-                                },
-                                f.size(),
-                            )
-                        });
-                    })
-                    .unwrap();
             }
 
-            io::Result::Ok(())
-        })
-        .await?;
+            let Context {
+                callbacks,
+                state,
+                size: _,
+                jobs: _,
+            } = cx;
+            self.state = state;
+            callbacks.into_iter().for_each(|cc| cc(&mut self));
 
-        drop(guard);
+            if self.exit {
+                break;
+            }
+
+            terminal
+                .draw(|f| {
+                    self.layers.values().flat_map(|l| l.iter()).for_each(|c| {
+                        f.render_widget(
+                            ComponentWidget {
+                                component: &**c,
+                                state: &self.state,
+                            },
+                            f.size(),
+                        )
+                    });
+                })
+                .unwrap();
+        }
+
         Ok(())
     }
 }
